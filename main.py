@@ -8,8 +8,6 @@ from zoneinfo import ZoneInfo
 from utils import reply
 import asyncio
 import requests
-import re
-import subprocess
 
 load_dotenv()
 token = os.getenv("DISCORD_TOKEN")
@@ -35,7 +33,7 @@ class MyBot(commands.Bot):
             tree_cls=CustomCommandTree
         )
     async def setup_hook(self):
-        await self.load_extension('cogs.reminders')
+        # await self.load_extension('cogs.reminders')
         await self.load_extension('cogs.news')
         await self.load_extension('cogs.quotegame')
         await self.tree.sync()
@@ -148,35 +146,31 @@ async def servers(ctx):
     server_list = "\n".join(guild_names)
     await ctx.send(f"I am in the following {len(bot.guilds)} servers:\n{server_list}")
 
-def sanitize_unit(user_input: str) -> str:
-    # Only allow alphanumeric, spaces, and specific math/punctuation symbols
-    if not re.match(r'^[\w\s\.\+\-\*\/\^\(\)]+$', user_input):
-        raise ValueError("Invalid characters detected.")
-    
-    # Strip leading whitespace to prepare for the next check
-    cleaned = user_input.strip()
-    
-    # Prevent flag injection (e.g., someone trying to pass "--file=/etc/passwd")
-    if cleaned.startswith('-'):
-        raise ValueError("Flags are not allowed.")
-        
-    return cleaned
-
-# quote
+# units
 @bot.hybrid_command(help="Get GNU units response")
 async def units(ctx, user_from: str, user_to: str=""):
+    await ctx.defer()
     try:
-        result = subprocess.run(
-            ["units", "-v", sanitize_unit(user_from)] if user_to == "" else ["units", "-v", sanitize_unit(user_from), sanitize_unit(user_to)],
-            capture_output=True,
-            text=True,
-            timeout=1.0 
+        response = await asyncio.to_thread(
+            requests.post,
+            "https://api.dungewar.com/units/convert",
+            json={"from": user_from, "to": user_to, "options": {"mode": "verbose"}},
+            timeout=20,
         )
-        await ctx.send(f"```units\n{result.stdout}```")
-    except subprocess.TimeoutExpired:
+        result = response.json()
+        if not response.ok:
+            output = result["error"]["message"]
+        else:
+            output = result["output"]
+            if result["stderr"]:
+                output += ("\n" if output and not output.endswith("\n") else "") + result["stderr"]
+            if result["exitCode"] != 0:
+                output = f"Conversion failed (exit code {result['exitCode']}).\n{output}"
+            output = output or "No output returned."
+        for start in range(0, len(output), 1900):
+            await ctx.send(f"```units\n{output[start:start + 1900]}```", allowed_mentions=discord.AllowedMentions.none())
+    except requests.Timeout:
         await ctx.send("Calculation timed out >:(")
-    except ValueError:
-        await ctx.send("Nice try. Invalid input.")
     except Exception as e:
         await ctx.send(f"Error doing units: ```{e}```")
 
